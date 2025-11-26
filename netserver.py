@@ -588,20 +588,27 @@ class ChatServer:
         """Send message to all clients in a channel."""
         disconnected = []
         
-        for client_sock, client in self.clients.items():
+        # Make a copy of the clients dict to avoid modification during iteration
+        clients_snapshot = list(self.clients.items())
+        
+        for client_sock, client in clients_snapshot:
+            # Skip if not in the right channel
             if client.current_channel != channel:
                 continue
             
+            # Skip sender unless include_sender is True
             if client_sock == sender and not include_sender:
                 continue
             
             try:
                 client_sock.sendall(msg.encode('utf-8'))
-            except (BrokenPipeError, OSError):
+            except (BrokenPipeError, OSError, AttributeError):
                 disconnected.append(client_sock)
         
+        # Clean up disconnected clients
         for sock in disconnected:
-            self.remove_client(sock, notify=False)
+            if sock in self.clients:  # Check again in case already removed
+                self.remove_client(sock, notify=False)
     
     def send_to_client(self, client_sock: socket.socket, msg: str):
         """Send message to specific client."""
@@ -1008,17 +1015,36 @@ class ChatServer:
     
     def remove_client(self, client_sock: socket.socket, notify: bool = True):
         """Remove authenticated client."""
-        if client_sock not in self.clients:
+        # Get client info before doing anything
+        client = self.clients.get(client_sock)
+        
+        if not client:
+            # Already removed or never existed
             return
         
-        client = self.clients[client_sock]
         print(f"[-] {client.username} disconnected")
         
-        if notify:
-            self.broadcast_to_channel(client.current_channel, 
-                                     f"*** {client.username} left the chat ***\n")
+        # Remove from dict FIRST before closing socket or broadcasting
+        try:
+            del self.clients[client_sock]
+        except KeyError:
+            # Already removed in another thread
+            pass
         
-        del self.clients[client_sock]
+        # Now broadcast (after removal so we don't send to this client)
+        if notify:
+            try:
+                self.broadcast_to_channel(client.current_channel, 
+                                         f"*** {client.username} left the chat ***\n")
+            except Exception as e:
+                print(f"[!] Error broadcasting disconnect: {e}")
+        
+        # Close socket last
+        try:
+            client_sock.shutdown(socket.SHUT_RDWR)
+        except:
+            pass
+        
         try:
             client_sock.close()
         except:
