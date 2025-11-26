@@ -597,13 +597,12 @@ class ChatUI:
                 stdscr.move(current_line, 0)
                 stdscr.clrtoeol()
                 
-                # Check if this is a user message that should be formatted
-                # Format: "[ID] username: message" or system messages "*** ... ***"
-                if msg.startswith('[') and ']' in msg and ': ' in msg:
+                # Check if this is a message with ID format: "[ID] username: message"
+                if msg.startswith('[') and ']' in msg:
                     # Extract message ID
                     id_end = msg.find(']')
                     msg_id = msg[1:id_end]
-                    rest = msg[id_end+2:]  # Skip "] "
+                    rest = msg[id_end+2:] if len(msg) > id_end+2 else msg[id_end+1:]  # Skip "] " or "]"
                     
                     # Draw message ID in cyan
                     try:
@@ -642,27 +641,38 @@ class ChatUI:
                             )
                             current_line += max(1, lines)
                         else:
-                            # Fallback
-                            display_msg = msg[:width-1]
-                            stdscr.addstr(current_line, 0, display_msg)
+                            # Fallback - just display what we have
+                            try:
+                                stdscr.addstr(current_line, id_len, rest[:width-1-id_len])
+                            except curses.error:
+                                pass
                             current_line += 1
                     else:
-                        # No username:message format
-                        display_msg = rest[:width-1-id_len]
+                        # No colon - might be a system message with ID
                         try:
-                            stdscr.addstr(current_line, id_len, display_msg)
+                            stdscr.addstr(current_line, id_len, rest[:width-1-id_len])
                         except curses.error:
                             pass
                         current_line += 1
                 
-                elif ': ' in msg and not msg.startswith('***') and not msg.startswith('['):
-                    # Old format without ID (for compatibility)
+                elif ': ' in msg and not msg.startswith('***'):
+                    # Old format without ID (for compatibility) or timestamp format
+                    # Check if it starts with a timestamp like [2025-11-26
+                    if msg.startswith('[20'):
+                        # Has timestamp, skip it
+                        timestamp_end = msg.find(']')
+                        if timestamp_end > 0:
+                            msg = msg[timestamp_end+2:]  # Skip timestamp
+                    
                     parts = msg.split(': ', 1)
                     if len(parts) == 2:
                         username, message = parts
                         
-                        # Draw username normally
-                        stdscr.addstr(current_line, 0, username + ': ', curses.A_BOLD)
+                        # Draw username in bold
+                        try:
+                            stdscr.addstr(current_line, 0, username + ': ', curses.A_BOLD)
+                        except curses.error:
+                            pass
                         username_len = len(username) + 2
                         
                         # Draw message with markdown formatting
@@ -673,23 +683,36 @@ class ChatUI:
                     else:
                         # Fallback to plain text
                         display_msg = msg[:width-1]
-                        stdscr.addstr(current_line, 0, display_msg)
+                        try:
+                            stdscr.addstr(current_line, 0, display_msg)
+                        except curses.error:
+                            pass
                         current_line += 1
                 else:
                     # System messages and other text - display normally
                     display_msg = msg[:width-1]
                     
                     # Color system messages
-                    if msg.startswith('***'):
-                        stdscr.addstr(current_line, 0, display_msg, curses.A_DIM)
-                    elif msg.startswith('[DM'):
-                        stdscr.addstr(current_line, 0, display_msg, curses.A_BOLD | curses.color_pair(2) if curses.has_colors() else curses.A_BOLD)
-                    else:
-                        stdscr.addstr(current_line, 0, display_msg)
+                    try:
+                        if msg.startswith('***'):
+                            stdscr.addstr(current_line, 0, display_msg, curses.A_DIM)
+                        elif msg.startswith('[DM'):
+                            stdscr.addstr(current_line, 0, display_msg, curses.A_BOLD | curses.color_pair(2) if curses.has_colors() else curses.A_BOLD)
+                        else:
+                            stdscr.addstr(current_line, 0, display_msg)
+                    except curses.error:
+                        pass
                     
                     current_line += 1
                     
             except curses.error:
+                current_line += 1
+            except Exception as e:
+                # Fallback for any parsing errors - just show the raw message
+                try:
+                    stdscr.addstr(current_line, 0, msg[:width-1])
+                except:
+                    pass
                 current_line += 1
         
         # Clear remaining lines in chat area
